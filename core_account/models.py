@@ -6,9 +6,10 @@ from django.contrib.auth.models import AbstractUser,Group, Permission
 class User(AbstractUser):
     # General Information about the user
     profile = models.ImageField(upload_to="profile/images", blank=True, null=True)
+    profile_info  = models.CharField(max_length=100,null=True,blank=True)
     full_name = models.CharField(max_length=100)
     username = models.CharField(max_length=100, unique=True, db_index=True)
-    email = models.EmailField(null=False, unique=True)  
+    email = models.EmailField(null=False, unique=True)
     date_of_birth = models.DateField(default=None, null=True)
     mobile_number = models.BigIntegerField(null=True)
     otp = models.PositiveIntegerField(null=True)

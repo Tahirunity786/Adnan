@@ -23,7 +23,7 @@ class UserPostSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserPost
-        fields = [ 'user','images', 'videos', 'title', 'description']
+        fields = [ 'user','images', 'videos', 'title', 'description', 'date', 'likes_count', 'comments_count']
 
 
 class LikeSerializer(serializers.ModelSerializer):
@@ -72,8 +72,19 @@ class CommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Comment
-        fields = ['id', 'user', 'post', 'content', 'timestamp', 'replies']
-        read_only_fields = ['user', 'timestamp']
+        fields = ['id', 'user', 'post', 'content', 'timestamp', 'replies', 'parent_comment']
+        read_only_fields = ['user', 'timestamp', 'parent_comment']
+
+class RCommentSerializer(serializers.ModelSerializer):
+    """
+    Serializer for comments on posts.
+    """
+    replies = RecursiveCommentSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Comment
+        fields = ['id', 'user', 'content', 'timestamp', 'replies', 'parent_comment']
+        read_only_fields = ['user', 'timestamp', 'parent_comment']
 
 class SaveSerializer(serializers.ModelSerializer):
     """
@@ -96,3 +107,31 @@ class UnsaveSerializer(serializers.Serializer):
         if not UserPost.objects.filter(id=value).exists():
             raise serializers.ValidationError("Invalid post ID.")
         return value
+
+
+class CCommentSerializer(serializers.ModelSerializer):
+    replies = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Comment
+        fields = ('id', 'user', 'content', 'timestamp', 'replies')
+
+    def get_replies(self, obj):
+        replies = Comment.objects.filter(parent_comment=obj)
+        return CommentSerializer(replies, many=True).data
+
+class CLikeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Like
+        fields = '__all__'
+
+
+class CommentUserPostSerializer(serializers.ModelSerializer):
+    images = PostImageMediaSerializer(many=True, read_only=True)
+    videos = PostVideoMediaSerializer(many=True, read_only=True)
+    comments = CCommentSerializer(many=True, read_only=True)
+    likes = CLikeSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = UserPost
+        fields = ('images', 'videos', 'title', 'description', 'date', 'likes', 'comments')

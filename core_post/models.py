@@ -27,7 +27,7 @@ class UserPost(models.Model):
     date = models.DateTimeField(auto_now_add=True)
     likes_count = models.IntegerField(default=0)
     comments_count = models.IntegerField(default=0)
-    is_published = models.BooleanField(default=False)
+    is_published = models.BooleanField(default=True)
 
     def __str__(self):
         """
@@ -59,6 +59,7 @@ class Comment(models.Model):
     post = models.ForeignKey(UserPost, on_delete=models.CASCADE, related_name='comments')
     content = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
+    parent_comment = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
 
 
 class Save(models.Model):

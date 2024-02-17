@@ -1,7 +1,14 @@
-from django.urls import path
-from core_post.views import (UserPostCreateView, UserPostDeleteView, UserPostUpdateView, LikeDeleteView, CommentCreateView, CommentsonCommentCreateView, UserPostFavoriteView, UserPostFavoriteDeleteView, LikeCreateView, SavePostView, UnsavePostView)
+from django.urls import path, include
+from rest_framework import routers
+from core_post.views import (CommentsUserPostViewSet, UserPostCreateView, UserPostDeleteView, UserPostUpdateView, LikeDeleteView, CommentCreateView, CommentsonCommentCreateView, UserPostFavoriteView, UserPostFavoriteDeleteView, LikeCreateView, SavePostView, UnsavePostView, UserSearchPostAPIView)
+
+router = routers.DefaultRouter()
+router.register(r'public/posts', CommentsUserPostViewSet)
+
+
 
 urlpatterns = [
+    path('', include(router.urls)),
     path("public/post/create", UserPostCreateView.as_view(), name="new-post-create"),
     path("public/post/delete", UserPostDeleteView.as_view(), name="new-post-delete"),
     path("public/post/update", UserPostUpdateView.as_view(), name="new-post-update"),
@@ -13,5 +20,8 @@ urlpatterns = [
     path("public/post/like/delete", LikeDeleteView.as_view(), name="post-like-delete"),
     path("public/post/save", SavePostView.as_view(), name="post-save"),
     path("public/post/save/delete", UnsavePostView.as_view(), name="post-save-del"),
-    
+    path("public/post/search", UserSearchPostAPIView.as_view(), name="post-search"),
+
+
+
 ]

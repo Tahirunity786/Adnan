@@ -9,6 +9,7 @@ from rest_framework.permissions import AllowAny
 from core_account.renderers import UserRenderer
 from rest_framework.views import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 from google.auth.transport import requests
 from google.oauth2.id_token import verify_oauth2_token
 import requests as efwe
@@ -24,16 +25,15 @@ from django.contrib.auth import get_user_model
 from core_account.token import get_tokens_for_user
 from core_account.utiles import send_otp_email, get_user_by_identifier
 from core_account.utiles import generate_otp
-from django.contrib.auth import login
-
-
+from django.contrib.auth import login, authenticate
+from core_account.serializers import UserSerializer
 
 User = get_user_model()
 
 from core_account.serializers import (
     CreateUserSerializer,
     SocialSerializer,
-   
+
 )
 
 
@@ -80,6 +80,58 @@ class CreateUserView(APIView):
             return Response(response_data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class UserLogin(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        # Extracting username and password from request data
+        username_data = request.data.get("username")
+        password_data = request.data.get("password")
+
+        if username_data and password_data:
+            # Checking if the provided identifier is an email, and if so, fetching the corresponding username
+            if '@' in username_data:
+                try:
+                    usr = User.objects.get(email=username_data)
+                    username_data = usr.username
+                except User.DoesNotExist:
+                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "No User with this Email !"})
+
+            # Authenticating the user
+            user = authenticate(username=username_data, password=password_data)
+
+            if user:
+                # Checking account status and preparing user data for response
+                if user.is_blocked:
+                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Account banned"})
+
+                if not user.is_verified and not user.is_superuser:
+                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Account not verified"})
+
+                prof = settings.BACKEND + user.profile.url if user.profile else None
+
+                user_data = {
+                    "user_id": user.id,
+                    "username": user.username,
+                    "profile": prof,
+                    "fullname": user.full_name,
+                    "info": user.profile_info if user.profile_info else None,
+                }
+
+                return Response(status=status.HTTP_202_ACCEPTED, data={"message": "logged in", "user": user_data})
+            else:
+                # Handling authentication failure scenarios
+                if User.objects.filter(username=username_data).exists():
+                    return Response(status=status.HTTP_401_UNAUTHORIZED, data={"message": "Password Wrong !"})
+                else:
+                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "No Such User !"})
+        else:
+            return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Credentials not provided"})
+
+
 
 
 class GoogleAuthAPIView(APIView):
@@ -154,6 +206,7 @@ class GoogleAuthAPIView(APIView):
             return Response({"error": f"Invalid token: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
 
+
 class VerifyOtp(APIView):
     """
     API endpoint to verify OTP (One Time Password) for user authentication.
@@ -201,7 +254,7 @@ class VerifyOtp(APIView):
                     usr = User.objects.get(email=username)
                 else:
                     usr = User.objects.get(username=username)
-                  
+
 
                 # Check if the OTP matches
                 if str(usr.otp) == otp:
@@ -241,6 +294,7 @@ class VerifyOtp(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
                 data={"message": "Username and OTP are required fields"},
             )
+
 
 class GetNewOtp(APIView):
     """
@@ -286,14 +340,13 @@ class GetNewOtp(APIView):
             else:
                 # If OTP limit is None, initialize it to 1
                 usr.otp_limit = 1
-            
+
             usr.save()  # Saving the updated user instance
             send_otp_email(usr, subject, message)  # Send the OTP email to the user
 
             return Response(status=status.HTTP_200_OK, data={"message": f"Otp sent to {usr.email}"})
         except Exception as e:
-            # Catch any exceptions that occur during the process and return a 400 Bad Request response with a generic error message
-            print(f"Exception: {str(e)}")
+            # Catch any exceptions that occur during the process and return a 400 Bad Request response with a generic error messag
             return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": f"An error occurred while processing the request"})
 
 
@@ -340,3 +393,19 @@ class SocialLoginView(generics.GenericAPIView):
         return Response({'error': 'Failed to authenticate user'}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class UserSearchView(generics.ListAPIView):
+    """
+    View for searching/filtering user accounts by username.
+    """
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated]  # Adjust permissions as needed
+
+    def get_queryset(self):
+        """
+        Get queryset filtered by username.
+        """
+        username = self.request.data.get('username', None)
+        if username:
+            return User.objects.filter(username__icontains=username)
+        return User.objects.none()  # Return an empty queryset if no username provided
