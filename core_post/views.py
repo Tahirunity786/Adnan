@@ -1,13 +1,13 @@
 from rest_framework.permissions import IsAuthenticated
 from django.db import transaction
-from core_post.models import Comment, Favorite, Like, Save, UserPost
+from core_post.models import Comment, Favorite, Like, Save, User, UserPost
 from rest_framework import generics, viewsets
 from rest_framework.views import APIView
 from rest_framework import status
 from rest_framework.views import Response
 from rest_framework.decorators import action
 from core_post.models import UserPost
-from core_post.serializers import (CommentUserPostSerializer, CommentSerializer, RCommentSerializer, FavoriteSerializer, LikeSerializer, PostImageMediaSerializer, PostVideoMediaSerializer, SaveSerializer, UnsaveSerializer, UserPostSerializer, UserPostSerializer)
+from core_post.serializers import (ArchieveSerializer, CommentUserPostSerializer, CommentSerializer, RCommentSerializer, FavoriteSerializer, LikeSerializer, PostImageMediaSerializer, PostVideoMediaSerializer, SaveSerializer, UnsaveSerializer, UserPostSerializer, UserPostSerializer)
 
 # Create your views here.
 
@@ -439,21 +439,84 @@ class UnsavePostView(APIView):
 
 
 class CommentsUserPostViewSet(viewsets.ModelViewSet):
+    """
+    A ViewSet for handling CRUD operations related to comments on user posts.
+    """
     queryset = UserPost.objects.all()
     serializer_class = CommentUserPostSerializer
 
 
 class UserSearchPostAPIView(APIView):
+    """
+    A custom API view to search posts based on title or description.
+    """
     permission_classes = [IsAuthenticated]
+
     def get(self, request):
         """
-        Custom action to search posts based on title or description.
+        Retrieves posts based on a search query.
+
+        Parameters:
+        - query (str): The search query string.
+
+        Returns:
+        - Response: JSON response containing the serialized search results.
+
+        Raises:
+        - HTTP 400 Bad Request: If the 'query' parameter is missing.
         """
+        # Retrieve the search query from request data
         query = request.data.get('query', None)
+
+        # Check if query parameter is provided
         if not query:
             return Response({'error': 'Query parameter "query" is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Search posts based on title or description containing the query string
         posts = UserPost.objects.filter(title__icontains=query) | UserPost.objects.filter(description__icontains=query)
+
+        # Serialize the search results
         serializer = UserPostSerializer(posts, many=True)
+
+        # Return the serialized data as JSON response
         return Response(serializer.data)
+
+class ArchieveCreateView(generics.CreateAPIView):
+    """
+    API endpoint for creating a like on a post.
+    """
+
+    serializer_class = ArchieveSerializer
+    permission_classes = [IsAuthenticated]  # Ensure user is authenticated
+    allowed_methods = ['POST']  # Allow only POST method
+
+    def create(self, request, *args, **kwargs):
+        """
+        Handle POST requests for creating a like on a post.
+
+        Returns a response with the created like data.
+        """
+
+        # Extract post ID from request data
+        post_id = request.data.get('post_id')
+
+        # Check if the post exists
+        try:
+            post = UserPost.objects.get(pk=post_id)
+        except UserPost.DoesNotExist:
+            return Response({"error": "Post not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if the user has already liked the post
+        if Like.objects.filter(user=request.user, post=post).exists():
+            return Response({"error": "You have already liked this post."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create like
+        serializer = self.get_serializer(data={'user': request.user.id, 'post': post_id})
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        # Increment post's likes count
+        post.is_archieved = True
+        post.save()
+
+        return Response(serializer.data, status=status.HTTP_201_CREATED)

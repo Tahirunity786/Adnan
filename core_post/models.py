@@ -1,6 +1,6 @@
 from django.db import models
 from django.contrib.auth import get_user_model
-
+from django.utils.text import slugify
 User = get_user_model()
 # Create your models here.
 class PostVideoMedia(models.Model):
@@ -20,33 +20,57 @@ class UserPost(models.Model):
     Model to represent user-created posts.
     """
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="posts_created", blank=True, null=True)
+    post_slug = models.SlugField(unique=True, default="")
     images = models.ManyToManyField(PostImageMedia, related_name="posts")
-    videos = models.ManyToManyField(PostVideoMedia, related_name="posts", blank=True )
+    videos = models.ManyToManyField(PostVideoMedia, related_name="postsvideos", blank=True )
     title = models.CharField(max_length=150, db_index=True)
     description = models.TextField(verbose_name="Post Description")
     date = models.DateTimeField(auto_now_add=True)
     likes_count = models.IntegerField(default=0)
     comments_count = models.IntegerField(default=0)
     is_published = models.BooleanField(default=True)
+    is_archieved = models.BooleanField(default=False)
+    tagged = models.ManyToManyField(User, related_name="peoples")
 
     def __str__(self):
         """
         String representation of the UserPost object.
         """
         return self.title
+    def save(self, *args, **kwargs):
+        # Auto-generate post_slug from username
+        self.post_slug = slugify(self.title)
+        super().save(*args, **kwargs)
 
     class Meta:
         verbose_name_plural = "User Posts"
 
 class Like(models.Model):
+    """
+    Represents a like on a user post.
+
+    Attributes:
+        user (User): The user who liked the post.
+        post (UserPost): The post that was liked.
+        date_time (DateTimeField): The date and time when the like was created.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     post = models.ForeignKey(UserPost, on_delete=models.CASCADE)
     date_time = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         unique_together = (("user", "post"),)
+
 
 class Favorite(models.Model):
+    """
+    Represents a favorite post by a user.
+
+    Attributes:
+        user (User): The user who favorited the post.
+        post (UserPost): The post that was favorited.
+        date_time (DateTimeField): The date and time when the post was favorited.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     post = models.ForeignKey(UserPost, on_delete=models.CASCADE)
     date_time = models.DateTimeField(auto_now_add=True)
@@ -54,7 +78,18 @@ class Favorite(models.Model):
     class Meta:
         unique_together = (("user", "post"),)
 
+
 class Comment(models.Model):
+    """
+    Represents a comment on a user post.
+
+    Attributes:
+        user (User): The user who posted the comment.
+        post (UserPost): The post on which the comment was posted.
+        content (TextField): The content of the comment.
+        timestamp (DateTimeField): The date and time when the comment was posted.
+        parent_comment (Comment): The parent comment if this comment is a reply to another comment.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     post = models.ForeignKey(UserPost, on_delete=models.CASCADE, related_name='comments')
     content = models.TextField()
@@ -63,6 +98,14 @@ class Comment(models.Model):
 
 
 class Save(models.Model):
+    """
+    Represents a saved post by a user.
+
+    Attributes:
+        user (User): The user who saved the post.
+        post (UserPost): The post that was saved.
+        date_time (DateTimeField): The date and time when the post was saved.
+    """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     post = models.ForeignKey(UserPost, on_delete=models.CASCADE)
     date_time = models.DateTimeField(auto_now_add=True)
@@ -70,3 +113,19 @@ class Save(models.Model):
     class Meta:
         unique_together = (("user", "post"),)
 
+
+class Archive(models.Model):
+    """
+    Represents an archived post by a user.
+
+    Attributes:
+        user (User): The user who archived the post.
+        post (UserPost): The post that was archived.
+        date_time (DateTimeField): The date and time when the post was archived.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    post = models.ForeignKey(UserPost, on_delete=models.CASCADE)
+    date_time = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = (("user", "post"),)
