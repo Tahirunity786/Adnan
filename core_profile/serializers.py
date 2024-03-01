@@ -2,7 +2,8 @@ from rest_framework import serializers
 from core_post.models import Save
 from django.contrib.auth import get_user_model
 from core_post.serializers import UserPostSerializer
-
+from core_profile.models import Story
+from core_account.models import interest
 User = get_user_model()
 
 
@@ -31,9 +32,10 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
     """
     Serializer for updating user profiles.
     """
+    interest = serializers.PrimaryKeyRelatedField(many=True, queryset=interest.objects.all(),required = False )
     class Meta:
         model = User
-        fields = ['email', 'username', 'full_name', 'date_of_birth', 'mobile_number', 'profile', 'profile_info']
+        fields = ['email', 'username', 'full_name', 'date_of_birth', 'mobile_number', 'profile', 'profile_info', 'interest']
 
 
 class UserdSerializer(serializers.Serializer):
@@ -52,3 +54,12 @@ class SaveSerializer(serializers.ModelSerializer):
     class Meta:
         model = Save
         fields = ['user', 'post', 'date_time']
+
+
+class StorySerializer(serializers.ModelSerializer):
+    """
+    Serializer for the Story model.
+    """
+    class Meta:
+        model = Story
+        fields = "__all__"

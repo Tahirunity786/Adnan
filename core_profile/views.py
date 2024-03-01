@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
 from rest_framework.permissions import IsAuthenticated
 from core_post.models import Like, Save, UserPost, archive
-from core_profile.serializers import (UserSerializer, UserdSerializer, GetProfileSerializer, UserProfileUpdateSerializer, SaveSerializer)
+from core_profile.serializers import (UserSerializer, UserdSerializer, GetProfileSerializer, UserProfileUpdateSerializer, SaveSerializer, StorySerializer)
 from core_post.serializers import ArchieveSerializer, UserPostSerializer, LikeSerializer
 from rest_framework.response import Response
 from rest_framework import status
@@ -15,7 +15,7 @@ from core_post.models import UserPost
 from rest_framework import generics, permissions
 User = get_user_model()
 
-class Get_profile(APIView):
+class Profile(APIView):
     """
     API endpoint to retrieve user profile details including followers, following, and posts.
 
@@ -35,6 +35,87 @@ class Get_profile(APIView):
         try:
             # Retrieve authenticated user
             user = User.objects.get(id=request.user.id)
+            # Serialize user profile
+            profile_serializer = GetProfileSerializer(user)
+
+            # Calculate the number of followers and following
+            followers_count = user.followers.count()
+            following_count = user.following.count()
+
+            # Retrieve user posts
+            posts = UserPost.objects.filter(user=user)
+
+            # Serialize user posts
+            post_serializer = UserPostSerializer(posts, many=True)
+
+            # Serialize followers and following
+            user_follower = [{"id": follower.id, "username": follower.username} for follower in user.followers.all()]
+            user_following = [{"id": following.id, "username": following.username} for following in user.following.all()]
+
+            # Prepare response data
+            response = {
+                'user_data': profile_serializer.data,
+                'follow_data': {
+                    'followers_count': followers_count,
+                    'following_count': following_count,
+                    'user_followers': user_follower,
+                    'user_following': user_following
+                },
+                'user_posts': {
+                    "post_count": posts.count(),
+                    "post_data": post_serializer.data,
+                }  # Serialized posts data
+            }
+            return Response(response, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response({"message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
+class Get_Profile(APIView):
+    """
+    API endpoint to retrieve user profile details including followers, following, and posts.
+    By an id
+
+    Requires authentication.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """
+        Retrieve user profile details.
+
+        Returns:
+            Response: JSON response containing user profile details, followers, following, and posts.
+        """
+
+        try:
+            # Get the user id to get profile
+            user_id = request.data.get("user_id")
+            # Retrieve authenticated user
+            user = User.objects.get(id=user_id)
+    
+            # If the user has a private account, only show limited information to non-followers
+            if user.account_mode == 'Private' and user != request.user:
+                # Calculate the number of followers and following
+                followers_count = user.followers.count()
+                following_count = user.following.count()
+                
+                # Prepare response data
+                response = {
+                    'user_data': {
+                        'id': user.id,
+                        'full_name': user.full_name,
+                        'username': user.username,
+                        'profile': user.profile.url if user.profile else None,
+                        'profile_slug': user.profile_slug,
+                        'profile_info': user.profile_info,
+                        'is_private': True,
+                        'followers_count': followers_count,
+                        'following_count': following_count,
+                    }
+                }
+                return Response(response, status=status.HTTP_200_OK)
 
             # Serialize user profile
             profile_serializer = GetProfileSerializer(user)
@@ -71,6 +152,7 @@ class Get_profile(APIView):
 
         except User.DoesNotExist:
             return Response({"message": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+
 
 class Share_profile(APIView):
     """
@@ -116,7 +198,7 @@ class FollowUser(APIView):
         Returns:
         - Response indicating success or failure of the operation.
         """
-        serializer = UserSerializer(data=request.data)
+        serializer = UserdSerializer(data=request.data)
         if serializer.is_valid():
             user_id = serializer.validated_data['user_id']
             try:
@@ -224,6 +306,7 @@ class UpdateProfile(APIView):
             "date_of_birth": "1990-01-01",
             "mobile_number": "1234567890",
             "profile_info": "New profile information"
+            "interest": User able to add interest such as sports, gaming etc
             # Include any other fields you want to update
         }
         """
@@ -379,3 +462,56 @@ class ArchievedPostList(generics.ListAPIView):
         """
         user = self.request.user
         return archive.objects.filter(user=user)
+
+class AddStoryView(APIView):
+    """
+    API endpoint for adding a story by a specific user.
+
+    Permissions:
+        - User must be authenticated.
+
+    Request Method:
+        - POST
+
+    Request Payload:
+        - image: Image file for the story (optional).
+        - video: Video file for the story (optional).
+
+    Response:
+        - HTTP 201 Created: If the story is successfully added.
+        - HTTP 400 Bad Request: If the request payload is invalid or incomplete.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Method to add a story for a specific user.
+
+        Args:
+            request (HttpRequest): HTTP request object.
+
+        Returns:
+            Response: JSON response indicating success or failure.
+        """
+        user = request.user
+        image = request.data.get("image")
+        video = request.data.get("video")
+
+        # Ensure at least one of image or video is provided
+        if not image and not video:
+            return Response({"error": "Either image or video is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create the story object
+        story_data = {"user": user}
+        if image:
+            story_data["image"] = image
+        if video:
+            story_data["video"] = video
+
+        serializer = StorySerializer(data=story_data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+

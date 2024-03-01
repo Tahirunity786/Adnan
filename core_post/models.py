@@ -2,27 +2,40 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from django.utils.text import slugify
 User = get_user_model()
+
+
+class Topics(models.Model):
+    topic = models.CharField(max_length=200, default="", db_index=True)
+
+
 # Create your models here.
 class PostVideoMedia(models.Model):
     """
     Model to represent videos associated with posts.
     """
-    video = models.FileField(upload_to="post_videos", verbose_name="Post Video")
+    video = models.FileField(upload_to="post_videos",
+                             verbose_name="Post Video")
+
 
 class PostImageMedia(models.Model):
     """
     Model to represent images associated with posts.
     """
-    image = models.ImageField(upload_to='post_images/', verbose_name="Post Image")
+    image = models.ImageField(upload_to='post_images/',
+                              verbose_name="Post Image")
+
 
 class UserPost(models.Model):
     """
     Model to represent user-created posts.
     """
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="posts_created", blank=True, null=True)
+    # Is show to Everyone and close friends
+    user = models.ForeignKey(User, on_delete=models.CASCADE,
+                             related_name="posts_created", blank=True, null=True)
     post_slug = models.SlugField(unique=True, default="")
     images = models.ManyToManyField(PostImageMedia, related_name="posts")
-    videos = models.ManyToManyField(PostVideoMedia, related_name="postsvideos", blank=True )
+    videos = models.ManyToManyField(
+        PostVideoMedia, related_name="postsvideos", blank=True)
     title = models.CharField(max_length=150, db_index=True)
     description = models.TextField(verbose_name="Post Description")
     date = models.DateTimeField(auto_now_add=True)
@@ -30,20 +43,38 @@ class UserPost(models.Model):
     comments_count = models.IntegerField(default=0)
     is_published = models.BooleanField(default=True)
     is_archieved = models.BooleanField(default=False)
+    show_to_close_friends = models.BooleanField(default=False)
     tagged = models.ManyToManyField(User, related_name="peoples")
+    Is_allow_comment = models.BooleanField(default=True)
+    add_topics = models.ManyToManyField(Topics, blank=True, default="")
+    hide_likes = models.BooleanField(default=False)
+    is_draft = models.BooleanField(default=False)
 
     def __str__(self):
         """
         String representation of the UserPost object.
         """
         return self.title
+
     def save(self, *args, **kwargs):
         # Auto-generate post_slug from username
         self.post_slug = slugify(self.title)
         super().save(*args, **kwargs)
 
+    def can_update_post(self):
+        """
+        Check if the post can be updated.
+        """
+        return (
+            self.is_published
+            and not self.is_archieved
+            and self.allow_comments
+            and not self.is_draft
+        )
+
     class Meta:
         verbose_name_plural = "User Posts"
+
 
 class Like(models.Model):
     """
@@ -91,10 +122,12 @@ class Comment(models.Model):
         parent_comment (Comment): The parent comment if this comment is a reply to another comment.
     """
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    post = models.ForeignKey(UserPost, on_delete=models.CASCADE, related_name='comments')
+    post = models.ForeignKey(
+        UserPost, on_delete=models.CASCADE, related_name='comments')
     content = models.TextField()
     timestamp = models.DateTimeField(auto_now_add=True)
-    parent_comment = models.ForeignKey('self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
+    parent_comment = models.ForeignKey(
+        'self', on_delete=models.CASCADE, null=True, blank=True, related_name='replies')
 
 
 class Save(models.Model):
@@ -114,7 +147,7 @@ class Save(models.Model):
         unique_together = (("user", "post"),)
 
 
-class Archive(models.Model):
+class archive(models.Model):
     """
     Represents an archived post by a user.
 

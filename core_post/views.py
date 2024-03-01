@@ -7,12 +7,34 @@ from rest_framework import status
 from rest_framework.views import Response
 from rest_framework.decorators import action
 from core_post.models import UserPost
-from core_post.serializers import (ArchieveSerializer, CommentUserPostSerializer, CommentSerializer, RCommentSerializer, FavoriteSerializer, LikeSerializer, PostImageMediaSerializer, PostVideoMediaSerializer, SaveSerializer, UnsaveSerializer, UserPostSerializer, UserPostSerializer)
+from core_post.serializers import (ArchieveSerializer, SocialPostSerializer, CommentSerializer, RCommentSerializer, FavoriteSerializer,
+                                   LikeSerializer, PostImageMediaSerializer, PostVideoMediaSerializer, SaveSerializer, UnsaveSerializer, UserPostSerializer, UserPostSerializer)
 
 # Create your views here.
 
 
 # ======================================= POST SECTION # ======================================= #
+
+
+class SocialPOST(viewsets.ModelViewSet):
+    """
+    A ViewSet for handling CRUD operations related to comments on user posts.
+    """
+    serializer_class = SocialPostSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = UserPost.objects.filter(
+            is_published=True,  # Filter out unpublished posts
+            is_archieved=False,  # Filter out archived posts
+            is_draft=False  # Filter out draft posts
+        )
+
+        # Filter posts based on user interests if available
+        if user.Interest.exists():
+            queryset = queryset.filter(add_topics__in=user.Interest.all())
+
+        return queryset
 
 class UserPostCreateView(generics.CreateAPIView):
     """
@@ -24,11 +46,12 @@ class UserPostCreateView(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]  # Ensure user is authenticated
     allowed_methods = ['POST']  # Allow only POST method
 
-
     def create(self, request, *args, **kwargs):
-        # Extract image and video data from request
+        # Extract image, video, tagged, and topics data from request
         image_data = request.data.getlist('images')
         video_data = request.data.getlist('videos')
+        tagged_data = request.data.getlist('tagged')
+        topics_data = request.data.getlist('add_topics')
 
         # Add the user to the request data
         request.data['user'] = request.user.id
@@ -43,20 +66,29 @@ class UserPostCreateView(generics.CreateAPIView):
 
                 # Save associated images
                 for image_item in image_data:
-                    image_serializer = PostImageMediaSerializer(data={'image': image_item})
+                    image_serializer = PostImageMediaSerializer(
+                        data={'image': image_item})
                     if image_serializer.is_valid():
                         image_serializer.save()
-                        serializer.instance.images.add(image_serializer.instance)
+                        serializer.instance.images.add(
+                            image_serializer.instance)
 
                 # Save associated videos
                 for video_item in video_data:
-                    video_serializer = PostVideoMediaSerializer(data={'video': video_item})
+                    video_serializer = PostVideoMediaSerializer(
+                        data={'video': video_item})
                     if video_serializer.is_valid():
                         video_serializer.save()
-                        serializer.instance.videos.add(video_serializer.instance)
+                        serializer.instance.videos.add(
+                            video_serializer.instance)
+
+                # Save tagged users
+                serializer.instance.tagged.set(tagged_data)
+
+                # Save topics
+                serializer.instance.add_topics.set(topics_data)
 
         except Exception as e:
-
             # Rollback transaction in case of error
             transaction.rollback()
 
@@ -68,8 +100,6 @@ class UserPostCreateView(generics.CreateAPIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
-
-
 class UserPostDeleteView(APIView):
     """
     API endpoint for deleting a user post.
@@ -79,7 +109,8 @@ class UserPostDeleteView(APIView):
 
     def post(self, request, *args, **kwargs):
         # Ensure that the request user is the owner of the post
-        post_id = request.data.get('post_id')  # Assuming you pass post_id in request data
+        # Assuming you pass post_id in request data
+        post_id = request.data.get('post_id')
         try:
             post = UserPost.objects.get(id=post_id, user=request.user)
         except UserPost.DoesNotExist:
@@ -88,7 +119,6 @@ class UserPostDeleteView(APIView):
 
         post.delete()
         return Response({"message": "Post deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
-
 
 
 class UserPostUpdateView(generics.UpdateAPIView):
@@ -129,14 +159,16 @@ class UserPostUpdateView(generics.UpdateAPIView):
 
         # Update associated images
         for image_item in image_data:
-            image_serializer = PostImageMediaSerializer(data={'image': image_item})
+            image_serializer = PostImageMediaSerializer(
+                data={'image': image_item})
             if image_serializer.is_valid():
                 image_serializer.save()
                 post.images.add(image_serializer.instance)
 
         # Update associated videos
         for video_item in video_data:
-            video_serializer = PostVideoMediaSerializer(data={'video': video_item})
+            video_serializer = PostVideoMediaSerializer(
+                data={'video': video_item})
             if video_serializer.is_valid():
                 video_serializer.save()
                 post.videos.add(video_serializer.instance)
@@ -174,7 +206,8 @@ class LikeCreateView(generics.CreateAPIView):
             return Response({"error": "You have already liked this post."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Create like
-        serializer = self.get_serializer(data={'user': request.user.id, 'post': post_id})
+        serializer = self.get_serializer(
+            data={'user': request.user.id, 'post': post_id})
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
@@ -313,6 +346,14 @@ class CommentCreateView(generics.CreateAPIView):
         except UserPost.DoesNotExist:
             return Response({"error": "Post not found."}, status=status.HTTP_404_NOT_FOUND)
 
+        # Check if the post can be updated and comments are allowed
+        if not post.can_update_and_allow_comments():
+            return Response({"error": "Cannot create comment on this post."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if the commenting user is muted by the post creator
+        if post.user.mute_peoples.filter(id=request.user.id).exists():
+            return Response({"error": "You are muted by the post creator."}, status=status.HTTP_403_FORBIDDEN)
+        
         # Create a new comment
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -323,8 +364,6 @@ class CommentCreateView(generics.CreateAPIView):
         serializer.save(user=request.user, post=post)
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
 
 class CommentsonCommentCreateView(generics.CreateAPIView):
     """
@@ -366,7 +405,8 @@ class CommentsonCommentCreateView(generics.CreateAPIView):
         # Create a new comment
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(user=request.user, post=post, parent_comment=parent_comment)
+        serializer.save(user=request.user, post=post,
+                        parent_comment=parent_comment)
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -388,11 +428,12 @@ class SavePostView(APIView):
         """
 
         user = request.user
-        post_id = request.data.get('post_id')  # Assuming post_id is passed in request data
+        # Assuming post_id is passed in request data
+        post_id = request.data.get('post_id')
 
         try:
             # Check if the post is already saved by the user
-            saved_post = Save.objects.get(user=user, post_id=post_id)
+            Save.objects.get(user=user, post_id=post_id)
             return Response({"message": "Post already saved by the user."}, status=status.HTTP_400_BAD_REQUEST)
         except Save.DoesNotExist:
             pass
@@ -404,6 +445,7 @@ class SavePostView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 class UnsavePostView(APIView):
     """
@@ -438,14 +480,6 @@ class UnsavePostView(APIView):
             return Response({"error": "Post is not saved by the user."}, status=status.HTTP_400_BAD_REQUEST)
 
 
-class CommentsUserPostViewSet(viewsets.ModelViewSet):
-    """
-    A ViewSet for handling CRUD operations related to comments on user posts.
-    """
-    queryset = UserPost.objects.all()
-    serializer_class = CommentUserPostSerializer
-
-
 class UserSearchPostAPIView(APIView):
     """
     A custom API view to search posts based on title or description.
@@ -473,13 +507,15 @@ class UserSearchPostAPIView(APIView):
             return Response({'error': 'Query parameter "query" is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Search posts based on title or description containing the query string
-        posts = UserPost.objects.filter(title__icontains=query) | UserPost.objects.filter(description__icontains=query)
+        posts = UserPost.objects.filter(
+            title__icontains=query) | UserPost.objects.filter(description__icontains=query)
 
         # Serialize the search results
         serializer = UserPostSerializer(posts, many=True)
 
         # Return the serialized data as JSON response
         return Response(serializer.data)
+
 
 class ArchieveCreateView(generics.CreateAPIView):
     """
@@ -511,7 +547,8 @@ class ArchieveCreateView(generics.CreateAPIView):
             return Response({"error": "You have already liked this post."}, status=status.HTTP_400_BAD_REQUEST)
 
         # Create like
-        serializer = self.get_serializer(data={'user': request.user.id, 'post': post_id})
+        serializer = self.get_serializer(
+            data={'user': request.user.id, 'post': post_id})
         serializer.is_valid(raise_exception=True)
         serializer.save()
 

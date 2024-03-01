@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from core_post.models import( Comment, Favorite, Like, Save, UserPost, PostImageMedia, PostVideoMedia, archive
-)
+from core_post.models import (Comment, Favorite, Like, Save, Topics, UserPost, PostImageMedia, PostVideoMedia, archive
+                              )
 User = get_user_model()
 
 
@@ -13,6 +13,7 @@ class PostImageMediaSerializer(serializers.ModelSerializer):
         model = PostImageMedia
         fields = ['image']
 
+
 class PostVideoMediaSerializer(serializers.ModelSerializer):
     """
     Serializer for PostVideoMedia model.
@@ -21,19 +22,33 @@ class PostVideoMediaSerializer(serializers.ModelSerializer):
         model = PostVideoMedia
         fields = ['video']
 
+
 class UserPostSerializer(serializers.ModelSerializer):
     """
     Serializer for UserPost model.
     """
     # Nested serializer for handling post images
     images = PostImageMediaSerializer(many=True, required=False)
-    
+
     # Nested serializer for handling post videos
     videos = PostVideoMediaSerializer(many=True, required=False)
 
+    tagged = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=User.objects.all(), required=False)
+
+    add_topics = serializers.PrimaryKeyRelatedField(
+        many=True, queryset=Topics.objects.all(), required=False)
+
+    is_draft = serializers.BooleanField(required=False)
+
+    show_to_close_friends = serializers.BooleanField(required=False)
+
+    Is_allow_comment = serializers.BooleanField(required=False)
+
     class Meta:
         model = UserPost
-        fields = ['post_slug','user','images', 'videos', 'title', 'description', 'date', 'likes_count', 'comments_count']
+        fields = ['post_slug', 'user', 'images', 'videos', 'title', 'description', 'date', 'likes_count',
+                  'comments_count', 'tagged', 'show_to_close_friends', 'is_draft', 'add_topics', 'Is_allow_comment']
 
 
 class LikeSerializer(serializers.ModelSerializer):
@@ -44,6 +59,7 @@ class LikeSerializer(serializers.ModelSerializer):
         model = Like
         fields = '__all__'
 
+
 class FavoriteSerializer(serializers.ModelSerializer):
     """
     Serializer for Favorite model.
@@ -51,7 +67,6 @@ class FavoriteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Favorite
         fields = '__all__'
-
 
 
 class RecursiveCommentSerializer(serializers.ModelSerializer):
@@ -82,8 +97,10 @@ class CommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Comment
-        fields = ['id', 'user', 'post', 'content', 'timestamp', 'replies', 'parent_comment']
+        fields = ['id', 'user', 'post', 'content',
+                  'timestamp', 'replies', 'parent_comment']
         read_only_fields = ['user', 'timestamp', 'parent_comment']
+
 
 class RCommentSerializer(serializers.ModelSerializer):
     """
@@ -93,8 +110,10 @@ class RCommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Comment
-        fields = ['id', 'user', 'content', 'timestamp', 'replies', 'parent_comment']
+        fields = ['id', 'user', 'content',
+                  'timestamp', 'replies', 'parent_comment']
         read_only_fields = ['user', 'timestamp', 'parent_comment']
+
 
 class SaveSerializer(serializers.ModelSerializer):
     """
@@ -103,6 +122,7 @@ class SaveSerializer(serializers.ModelSerializer):
     class Meta:
         model = Save
         fields = ['user', 'post', 'date_time']
+
 
 class UnsaveSerializer(serializers.Serializer):
     """
@@ -145,6 +165,7 @@ class CCommentSerializer(serializers.ModelSerializer):
         replies = Comment.objects.filter(parent_comment=obj)
         return CommentSerializer(replies, many=True).data
 
+
 class CLikeSerializer(serializers.ModelSerializer):
     """
     Serializer for Like model.
@@ -153,8 +174,7 @@ class CLikeSerializer(serializers.ModelSerializer):
         model = Like
         fields = '__all__'
 
-
-class CommentUserPostSerializer(serializers.ModelSerializer):
+class SocialPostSerializer(serializers.ModelSerializer):
     """
     Serializer for UserPost model, including related images, videos, comments, and likes.
     """
@@ -166,6 +186,25 @@ class CommentUserPostSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserPost
         fields = ('images', 'videos', 'title', 'description', 'date', 'likes', 'comments')
+
+    def to_representation(self, instance):
+        """
+        Overriding the to_representation method to handle the 'show_to_close_friends' privacy setting and muted users.
+        """
+        request_user = self.context['request'].user
+
+        # Check if the post should be shown only to close friends
+        if instance.show_to_close_friends:
+            if not request_user in instance.user.close_friends.all():
+                return {}
+
+        # Check if the post creator has muted the requesting user
+        if request_user in instance.user.mute_peoples.all():
+            return {}
+
+        return super().to_representation(instance)
+
+
 
 class ArchieveSerializer(serializers.ModelSerializer):
     """

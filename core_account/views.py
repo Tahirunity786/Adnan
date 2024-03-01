@@ -1,9 +1,11 @@
+
 import datetime
 import os
 import random
 import string
 from urllib.parse import urlparse
 from django.conf import settings
+from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 from core_account.renderers import UserRenderer
@@ -13,10 +15,8 @@ from rest_framework.permissions import IsAuthenticated
 from google.auth.transport import requests
 from google.oauth2.id_token import verify_oauth2_token
 import requests as efwe
-from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.base import ContentFile
 from requests.exceptions import HTTPError
-from django.http import JsonResponse
 from rest_framework import generics
 from social_django.utils import load_strategy, load_backend
 from social_core.backends.oauth import BaseOAuth2
@@ -26,20 +26,25 @@ from core_account.token import get_tokens_for_user
 from core_account.utiles import send_otp_email, get_user_by_identifier
 from core_account.utiles import generate_otp
 from django.contrib.auth import login, authenticate
-from core_account.serializers import UserSerializer
-
-User = get_user_model()
-
+from core_account.serializers import ForgotPasswordSerializer, UserSerializer, ResetPasswordSerializer
+from django.contrib.auth.hashers import make_password
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.translation import gettext as _
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+from django.urls import reverse
+from rest_framework.decorators import api_view
 from core_account.serializers import (
     CreateUserSerializer,
     SocialSerializer,
-
 )
 
+User = get_user_model()
+# =================== ACCOUNT MANAGEMENT SECTION # =================== #
 
 
-
-# ======================================= ACCOUNT MANAGEMENT SECTION # ======================================= #
 class CreateUserView(APIView):
     """
     Class-based view for creating a new user account.
@@ -69,70 +74,71 @@ class CreateUserView(APIView):
             if mobile:
                 pass  # Implement mobile verification logic here
 
-            token = get_tokens_for_user(account)
             response_data = {
                 'response': 'Account has been created',
                 'username': account.username,
                 'email': account.email,
                 'id': account.id,
-                'token': token
+
             }
             return Response(response_data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-
 class UserLogin(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        # Extracting username and password from request data
-        username_data = request.data.get("username")
-        password_data = request.data.get("password")
+        email = request.data.get("email")
+        password = request.data.get("password")
 
-        if username_data and password_data:
-            # Checking if the provided identifier is an email, and if so, fetching the corresponding username
-            if '@' in username_data:
-                try:
-                    usr = User.objects.get(email=username_data)
-                    username_data = usr.username
-                except User.DoesNotExist:
-                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "No User with this Email !"})
+        # Check if email and password are provided
+        if not email or not password:
+            return Response({"error": "Email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Authenticating the user
-            user = authenticate(username=username_data, password=password_data)
+        # Authenticate the user
+        user = authenticate(request, username=email, password=password)
 
-            if user:
-                # Checking account status and preparing user data for response
-                if user.is_blocked:
-                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Account banned"})
+        # Check if the user is authenticated
+        if user is None:
+            return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
-                if not user.is_verified and not user.is_superuser:
-                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Account not verified"})
+        # Check if the user has two-factor authentication enabled
+        if user.two_factor_auth:
+            generated_otp = generate_otp()
+            subject = 'Verify Identity'
+            message = f'Your two-factor authentication code is {generated_otp}. Opt will expire in 5 minutes.'
+            otp_sent = send_otp_email(user.email, subject, message)
 
-                prof = settings.BACKEND + user.profile.url if user.profile else None
+            if not otp_sent:
+                return Response({"error": "Failed to send OTP"}, status=status.HTTP_400_BAD_REQUEST)
 
-                user_data = {
-                    "user_id": user.id,
-                    "username": user.username,
-                    "profile": prof,
-                    "fullname": user.full_name,
-                    "info": user.profile_info if user.profile_info else None,
-                }
+            user.otp = generated_otp
+            user.save()
+            return Response({"message": "Verify your identity! OTP sent to your email."}, status=status.HTTP_200_OK)
 
-                return Response(status=status.HTTP_202_ACCEPTED, data={"message": "logged in", "user": user_data})
-            else:
-                # Handling authentication failure scenarios
-                if User.objects.filter(username=username_data).exists():
-                    return Response(status=status.HTTP_401_UNAUTHORIZED, data={"message": "Password Wrong !"})
-                else:
-                    return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "No Such User !"})
-        else:
-            return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Credentials not provided"})
+        # Proceed with regular login process
+        if not user.is_verified:
+            return Response({"error": "Account not verified"}, status=status.HTTP_400_BAD_REQUEST)
 
+        if user.is_blocked:
+            return Response({"error": "Account banned"}, status=status.HTTP_400_BAD_REQUEST)
 
+        profile_url = settings.BACKEND + user.profile.url if user.profile else None
+        token = get_tokens_for_user(user)
 
+        user_data = {
+            "user_id": user.id,
+            "username": user.username,
+            "profile": profile_url,
+            "fullname": user.full_name,
+            "info": user.profile_info if user.profile_info else None,
+            "token": token,
+            "two-factor-auth":user.two_factor_auth
+        }
+
+        return Response({"message": "Logged in", "user": user_data}, status=status.HTTP_202_ACCEPTED)
 
 class GoogleAuthAPIView(APIView):
     """
@@ -170,20 +176,26 @@ class GoogleAuthAPIView(APIView):
             except User.DoesNotExist:
                 # Generate a random username and password for new user
                 username = user_email.split('@')[0]
-                password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-                user = User.objects.create_user(email=user_email, username=username, password=password, full_name=name)
+                password = ''.join(random.choices(
+                    string.ascii_letters + string.digits, k=12))
+                user = User.objects.create_user(
+                    email=user_email, username=username, password=password, full_name=name)
                 created = True
             # Download and save the profile picture if available
             if user_image_url:
                 try:
                     image_response = efwe.get(user_image_url)
                     image_response.raise_for_status()  # Raise exception for non-200 status codes
-                    file_extension = os.path.splitext(urlparse(user_image_url).path)[1] or '.jpg'
-                    random_filename = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-                    file_path = os.path.join(settings.MEDIA_ROOT, random_filename + file_extension)
+                    file_extension = os.path.splitext(
+                        urlparse(user_image_url).path)[1] or '.jpg'
+                    random_filename = ''.join(random.choices(
+                        string.ascii_letters + string.digits, k=12))
+                    file_path = os.path.join(
+                        settings.MEDIA_ROOT, random_filename + file_extension)
                     with open(file_path, 'wb') as f:
                         f.write(image_response.content)
-                    user.profile.save(random_filename + file_extension, ContentFile(image_response.content), save=True)
+                    user.profile.save(random_filename + file_extension,
+                                      ContentFile(image_response.content), save=True)
                 except (requests.RequestException, IOError) as e:
                     return Response({"error": f"Error while fetching image: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -204,7 +216,6 @@ class GoogleAuthAPIView(APIView):
         except ValueError as e:
             # Invalid token
             return Response({"error": f"Invalid token: {e}"}, status=status.HTTP_400_BAD_REQUEST)
-
 
 
 class VerifyOtp(APIView):
@@ -255,7 +266,6 @@ class VerifyOtp(APIView):
                 else:
                     usr = User.objects.get(username=username)
 
-
                 # Check if the OTP matches
                 if str(usr.otp) == otp:
                     current_time = datetime.datetime.now().time()
@@ -300,7 +310,8 @@ class GetNewOtp(APIView):
     """
     API endpoint to generate and send a new OTP (One-Time Password) for account verification via email.
     """
-    permission_classes = [AllowAny]  # Allow any user, authenticated or not, to access this endpoint.
+    permission_classes = [
+        AllowAny]  # Allow any user, authenticated or not, to access this endpoint.
 
     def post(self, request):
         """
@@ -327,7 +338,7 @@ class GetNewOtp(APIView):
                 return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": "Otp Limit Ended, please try with another email!"})
 
             # Sending a new OTP for account verification via email
-            subject =  'Account Verification: Social Media'
+            subject = 'Account Verification: Social Media'
             otp = generate_otp()
             message = f'Your Account is created, please verify with this OTP {otp}. Otp will expire within 5 minutes.'
 
@@ -342,7 +353,8 @@ class GetNewOtp(APIView):
                 usr.otp_limit = 1
 
             usr.save()  # Saving the updated user instance
-            send_otp_email(usr, subject, message)  # Send the OTP email to the user
+            # Send the OTP email to the user
+            send_otp_email(usr, subject, message)
 
             return Response(status=status.HTTP_200_OK, data={"message": f"Otp sent to {usr.email}"})
         except Exception as e:
@@ -350,24 +362,27 @@ class GetNewOtp(APIView):
             return Response(status=status.HTTP_400_BAD_REQUEST, data={"message": f"An error occurred while processing the request"})
 
 
-
 class SocialLoginView(generics.GenericAPIView):
     """Log in using Facebook"""
 
-    serializer_class = SocialSerializer  # Assuming SocialSerializer is defined elsewhere
+    # Assuming SocialSerializer is defined elsewhere
+    serializer_class = SocialSerializer
     permission_classes = [AllowAny]
 
     def post(self, request):
         """Authenticate user through the provider and access_token"""
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
-        provider = serializer.validated_data.get('provider')  # Use validated_data instead of data
-        access_token = serializer.validated_data.get('access_token')  # Use validated_data instead of data
+        provider = serializer.validated_data.get(
+            'provider')  # Use validated_data instead of data
+        access_token = serializer.validated_data.get(
+            'access_token')  # Use validated_data instead of data
 
         strategy = load_strategy(request)
 
         try:
-            backend = load_backend(strategy=strategy, name=provider, redirect_uri=None)
+            backend = load_backend(
+                strategy=strategy, name=provider, redirect_uri=None)
         except MissingBackend:
             return Response({'error': 'Please provide a valid provider'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -380,7 +395,8 @@ class SocialLoginView(generics.GenericAPIView):
         if user and user.is_active:
             # Generate JWT token
             login(request, user)
-            token = get_tokens_for_user(user)  # Assuming get_tokens_for_user is defined elsewhere
+            # Assuming get_tokens_for_user is defined elsewhere
+            token = get_tokens_for_user(user)
 
             # Customize the response
             response_data = {
@@ -409,3 +425,439 @@ class UserSearchView(generics.ListAPIView):
         if username:
             return User.objects.filter(username__icontains=username)
         return User.objects.none()  # Return an empty queryset if no username provided
+
+class MutePeopleView(APIView):
+    """
+    API endpoint for muting/unmuting a user.
+
+    Permissions:
+        - User must be authenticated.
+
+    Request Method:
+        - POST
+
+    Request Payload:
+        - user_id: ID of the user to be muted.
+
+    logic:
+        Muted people can't able to  see user's post, comment, story
+    
+    Response:
+        - HTTP 200 OK: If the user is successfully muted/unmuted.
+        - HTTP 404 Not Found: If the user with the given ID does not exist.
+        - HTTP 400 Bad Request: If the request payload is invalid or incomplete.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Method to mute/unmute a user.
+
+        Args:
+            request (HttpRequest): HTTP request object.
+
+        Returns:
+            Response: JSON response indicating success or failure.
+        """
+        user = request.user
+        mute_user_id = request.data.get("user_id")
+
+        if not mute_user_id:
+            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        d_user = get_object_or_404(User, id=mute_user_id)
+
+        # Check if the user is already muted or not
+        if d_user in user.mute_peoples.all():
+            user.mute_peoples.remove(d_user)
+            action = "unmuted"
+        else:
+            # Only following people along with user will be muted
+            if d_user in user.following.all():
+                user.mute_peoples.add(d_user)
+                action = "muted"
+            else:
+                return Response({"message": "You can only mute users you are following."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"message": f"User {d_user.username} has been {action}."}, status=status.HTTP_200_OK)
+
+
+class BlockedPeopleView(APIView):
+    """
+    API endpoint for Blocked/Unblocked a user.
+
+    Permissions:
+        - User must be authenticated.
+
+    Request Method:
+        - POST
+
+    Request Payload:
+        - user_id: ID of the user to be Block.
+
+    Response:
+        - HTTP 200 OK: If the user is successfully block/unblock.
+        - HTTP 404 Not Found: If the user with the given ID does not exist.
+        - HTTP 400 Bad Request: If the request payload is invalid or incomplete.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Method to block/unblock a user.
+
+        Args:
+            request (HttpRequest): HTTP request object.
+
+        Returns:
+            Response: JSON response indicating success or failure.
+        """
+        user = request.user
+        blocked_user_id = request.data.get("user_id")
+
+        if not blocked_user_id:
+            return Response({"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        b_user = get_object_or_404(User, id=blocked_user_id)
+
+        # Logic to mute/unmute the user (modify as needed)
+        if b_user in user.blockek_peoples.all():
+            user.blockek_peoples.remove(b_user)
+            action = "Unblock"
+        else:
+            user.blockek_peoples.add(b_user)
+            action = "Block"
+
+        return Response({"message": f"User {b_user.username} has been {action}."}, status=status.HTTP_200_OK)
+
+
+class MakeaccoutPrivate(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+
+        # Logic to Private/Public the user account (modify as needed)
+        if user.account_mode == "Private":
+            user.account_mode = "Public"
+            action = "Public"
+        else:
+            user.account_mode = "Private"
+            action = "Private"
+
+        user.save()
+
+        return Response({"message": f"User {user.username} has been set to {action} mode."}, status=status.HTTP_200_OK)
+
+# ==================================== Acount settings area ==================================== #
+
+
+class ChangePasswordAccount(APIView):
+    """
+    API endpoint for changing user's account password.
+    Requires authentication.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        POST method to change user's account password.
+
+        Args:
+            request (HttpRequest): HTTP request object.
+
+        Returns:
+            Response: Response indicating success or failure.
+        """
+        # Retrieve current user
+        user = request.user
+
+        # Retrieve old password, new password, and confirm password from request data
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+        confirm_password = request.data.get('confirm_password')
+
+        # Check if new password and confirm password match
+        if new_password != confirm_password:
+            return Response({"error": "New password and confirm password do not match."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if old password is correct
+        if not user.check_password(old_password):
+            return Response({"error": "Old password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Set new password
+        user.password = make_password(new_password)
+        user.save()
+
+        return Response({"message": "Password changed successfully."}, status=status.HTTP_200_OK)
+
+
+class DeactvateAccount(APIView):
+    """
+    API endpoint for deleting a user account.
+
+    Only authenticated users can access this endpoint.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """
+        Handle POST request to delete user account.
+
+        Args:
+            request: HTTP request object.
+
+        Returns:
+            Response: JSON response indicating success or failure of account deletion.
+        """
+        user = request.user
+
+        try:
+            # Assuming you have a soft delete mechanism, such as setting is_active to False
+            user.is_active = False
+            user.save()
+
+            return Response({"detail": "Account successfully deleted."}, status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response({"detail": "Failed to delete account.", "error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ForgotPassword(APIView):
+    """
+    API endpoint to handle forgot password functionality.
+    """
+
+    def post(self, request):
+        """
+        Handle POST request for forgot password functionality.
+
+        Args:
+            request: HTTP request object.
+
+        Returns:
+            HTTP response indicating success or failure.
+        """
+        serializer = ForgotPasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            user_email = serializer.validated_data['email']
+            user = User.objects.filter(email=user_email).first()
+            if user:
+                # Generate a password reset token
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                token = default_token_generator.make_token(user)
+
+                # Create password reset link
+                reset_link = request.build_absolute_uri(
+                    reverse('reset_password', kwargs={
+                            'uidb64': uid, 'token': token})
+                )
+
+                # Send password reset email
+                subject = _('Password Reset Request')
+                message = f"Please click the following link to reset your password: {reset_link}"
+                from_email = settings.EMAIL_HOST_USER
+                to_email = user_email
+                send_mail(subject, message, from_email, [to_email])
+
+                return Response({'detail': _('Password reset email has been sent.')}, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': _('User with this email does not exist.')}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ResetPassword(APIView):
+    """
+    API endpoint to handle resetting password.
+    """
+    # def get(request):
+    #     """_summary_
+
+    #     Here you will able to add rest_password_page
+    #     """
+    #     pass
+
+    def post(self, request, uidb64, token):
+        """
+        Handle POST request for resetting password.
+        """
+        serializer = ResetPasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            uid = uidb64
+            new_password = serializer.validated_data['new_password']
+
+            # Decode uid to get user id
+            try:
+                user_id = str(urlsafe_base64_decode(uid), 'utf-8')
+                user = User.objects.get(pk=user_id)
+            except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+                user = None
+
+            # Check if user is valid
+            if user is not None and default_token_generator.check_token(user, token):
+                # Set new password
+                user.set_password(new_password)
+                user.save()
+                return Response({'detail': _('Password has been reset successfully.')}, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': _('Invalid user or token.')}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def verify_2fa(request):
+    """
+    Verify two-factor authentication (2FA) for user login.
+
+    Args:
+        request: Django request object containing user email and OTP.
+
+    Returns:
+        Response: JSON response indicating login success or failure.
+    """
+
+    if request.method != "POST":
+        return Response({"Error": "Only POST method allowed"}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    email = request.data.get('email')
+    otp = request.data.get('otp')
+
+    # Check if email and OTP are provided
+    if not email:
+        return Response({"Error": "Email not provided"}, status=status.HTTP_400_BAD_REQUEST)
+    if not otp:
+        return Response({"Error": "OTP not provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({"Error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({"Error": f"Error retrieving user: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    # Check if provided OTP matches user's OTP
+    if str(user.otp) != otp:
+        return Response({"Error": "Invalid OTP"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Check if OTP is expired
+    current_time = datetime.datetime.now().time()
+    if (current_time.minute - user.otp_delay.minute) > 5:
+        return Response({"Error": "OTP expired"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Generate system token and prepare user data for response
+    sys_token = get_tokens_for_user(user)
+    profile_url = settings.BACKEND + user.profile.url if user.profile else None
+    user_data = {
+        "user_id": user.id,
+        "username": user.username,
+        "profile": profile_url,
+        "fullname": user.full_name,
+        "info": user.profile_info if user.profile_info else None,
+        "token": sys_token,
+        "two-factor-auth":user.two_factor_auth
+
+    }
+
+    return Response({"Success": "Logged in", "user": user_data}, status=status.HTTP_202_ACCEPTED)
+
+
+@api_view(['POST'])
+def enable_2fa(request):
+    """
+    Enable two-factor authentication for a user's account.
+
+    Args:
+        request: Django request object containing user email and preferred 2FA method.
+
+    Returns:
+        Response: JSON response indicating the success or failure of enabling 2FA.
+
+    Procedure / Logic:
+            The User when want to enable the 2fa then user will email will provide and method also provide such as Email, SMS, Whatsapp that will use to verify. 
+            
+
+    """
+    if request.method == 'POST':
+        email = request.data.get('email')
+        method = request.data.get('method')
+
+        # Check if email and method are provided
+        if not email or not method:
+            return Response({"error": "Email and method are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if the method is valid
+        valid_methods = [choice[0] for choice in User.TWOFAUTH]
+        if method not in valid_methods:
+            return Response({"error": "Invalid method."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Fetch the user
+            user = User.objects.get(email=email)
+            
+            # Generate OTP
+            generated_otp = generate_otp()
+            subject = 'Verify Identity'
+            message = f'Your two-factor authentication code is {generated_otp}. Opt will expire in 5 minutes.'
+            otp_sent = send_otp_email(user.email, subject, message)
+
+            if not otp_sent:
+                return Response({"error": "Failed to send OTP"}, status=status.HTTP_400_BAD_REQUEST)
+           
+            # Save method
+            user.two_factor_auth_method = method
+            # Store OTP in user object temporarily
+            user.otp = generated_otp
+            user.save()
+
+            return Response({"message": "OTP sent to your email. Verify to enable 2FA."}, status=status.HTTP_200_OK)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        return Response({"error": "Only POST method allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+
+@api_view(['POST'])
+def catch_and_enable_2fa(request):
+    """
+    Verify OTP and enable two-factor authentication for the user.
+
+    Args:
+        request: Django request object containing user email and OTP.
+
+    Returns:
+        Response: JSON response indicating the success or failure of enabling 2FA.
+    """
+    if request.method == 'POST':
+        email = request.data.get('email')
+        otp = request.data.get('otp')
+
+        # Check if email and OTP are provided
+        if not email or not otp:
+            return Response({"error": "Email and OTP are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Fetch the user
+            user = User.objects.get(email=email)
+            
+            # Check if OTP matches
+            if str(user.otp) == otp:
+                # Check if OTP is expired
+                current_time = datetime.datetime.now().time()
+                if (current_time.minute - user.otp_delay.minute) > 5 or not user.otp:
+                    return Response({"Error": "OTP expired or not valid."}, status=status.HTTP_400_BAD_REQUEST)
+
+                # Enable 2FA for the user
+                user.two_factor_auth = True
+                user.save()
+
+                # Clear OTP
+                user.otp = None
+                user.save()
+
+                return Response({"message": "Two-factor authentication enabled successfully."}, status=status.HTTP_200_OK)
+            else:
+                return Response({"error": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        return Response({"error": "Only POST method allowed."}, status=status.HTTP_405_METHOD_NOT_ALLOWED)

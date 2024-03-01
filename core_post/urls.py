@@ -1,10 +1,11 @@
 from django.urls import path, include
 from rest_framework import routers
-from core_post.views import (CommentsUserPostViewSet, UserPostCreateView, UserPostDeleteView, UserPostUpdateView, LikeDeleteView, CommentCreateView, CommentsonCommentCreateView, UserPostFavoriteView, UserPostFavoriteDeleteView, LikeCreateView, SavePostView, UnsavePostView, UserSearchPostAPIView, ArchieveCreateView)
+from core_post.views import (SocialPOST, UserPostCreateView, UserPostDeleteView, UserPostUpdateView, LikeDeleteView, CommentCreateView, CommentsonCommentCreateView, UserPostFavoriteView, UserPostFavoriteDeleteView, LikeCreateView, SavePostView, UnsavePostView, UserSearchPostAPIView, ArchieveCreateView)
 
 # Create a router for handling viewsets
 router = routers.DefaultRouter()
-router.register(r'public/posts', CommentsUserPostViewSet)  # Register CommentsUserPostViewSet with the router
+router.register(r'public/posts', SocialPOST, basename='socialpost')  # Specify basename
+
 
 # URL patterns for various endpoints
 urlpatterns = [
