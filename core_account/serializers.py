@@ -6,47 +6,39 @@ from core_account.models import interest
 User = get_user_model()
 
 class CreateUserSerializer(serializers.ModelSerializer):
-    """
-    Serializer for creating a new user.
-    """
     password2 = serializers.CharField(style={'input_type': 'password'}, write_only=True)
-    interest = serializers.PrimaryKeyRelatedField(many=True, queryset=interest.objects.all(),required = False )
+    Interest = serializers.PrimaryKeyRelatedField(many=True, queryset=interest.objects.all(), required=False)
+
     class Meta:
         model = User
-        fields = ['full_name', 'username', 'email', 'password', 'password2', 'interest']
+        fields = ['full_name', 'username', 'email', 'password', 'password2', 'Interest']
         extra_kwargs = {'password': {'write_only': True}}
 
     def validate(self, data):
-        """
-        Validates password and confirms password match.
-        """
         password = data.get('password')
         password2 = data.pop('password2', None)
 
-        # Validate password strength
         validate_password(password)
 
         if password != password2:
             raise serializers.ValidationError({'password': 'Passwords do not match'})
+
         return data
 
     def create(self, validated_data):
-        """
-        Creates a new user and generates OTP.
-        """
-        email = validated_data.pop('email', None)  # Remove email from validated_data
+        email = validated_data.pop('email', None)
         if email is None:
             raise serializers.ValidationError({'email': 'Email field is required'})
 
-        validated_data['username'] = validated_data.get('username')  # Ensure username is provided
-        validated_data['password'] = validated_data.get('password')  # Ensure password is provided
+        validated_data['username'] = validated_data.get('username')
+        validated_data['password'] = validated_data.get('password')
 
-        # Generate OTP
-        otp = generate_otp() 
-        # Save the user with OTP
+        otp = generate_otp()
         user = User.objects.create_user(email=email, otp=otp, **validated_data)
-        user.account_mode="Public"
+        user.account_mode = "Public"
+
         return user
+
 
 class SocialSerializer(serializers.Serializer):
     """

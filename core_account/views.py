@@ -44,46 +44,71 @@ from core_account.serializers import (
 User = get_user_model()
 # =================== ACCOUNT MANAGEMENT SECTION # =================== #
 
-
 class CreateUserView(APIView):
-    """
-    Class-based view for creating a new user account.
-    """
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
-        """
-        Handles the HTTP POST request for creating a new user.
-        """
         serializer = CreateUserSerializer(data=request.data)
-        email = request.data.get("email", None)
-        mobile = request.data.get('mobile', None)
 
         if serializer.is_valid():
+            validated_data = serializer.validated_data
+            interests_data = validated_data.pop('Interest', [])
+            print(interests_data)
             account = serializer.save()
-
-            # Send OTP for account verification via email
-            if email:
-                subject = 'Account Verification: Social Media'
-                message = f'Your Account is created, please verify with this OTP {account.otp}. Otp will expire within 5 minutes'
-                otp_sent = send_otp_email(account, subject, message)
-                if not otp_sent:
-                    return Response({"error": "Failed to send OTP email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-            # Process mobile verification if provided
-            if mobile:
-                pass  # Implement mobile verification logic here
-
+            interest_names = [interest_obj.interests for interest_obj in interests_data]
+            account.Interest.add(*interests_data)
             response_data = {
                 'response': 'Account has been created',
                 'username': account.username,
                 'email': account.email,
                 'id': account.id,
-
+                'interests': interest_names
             }
+
             return Response(response_data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        
+# class CreateUserView(APIView):
+#     """
+#     Class-based view for creating a new user account.
+#     """
+#     permission_classes = [AllowAny]
+
+#     def post(self, request, *args, **kwargs):
+#         """
+#         Handles the HTTP POST request for creating a new user.
+#         """
+#         serializer = CreateUserSerializer(data=request.data)
+#         email = request.data.get("email", None)
+#         mobile = request.data.get('mobile', None)
+
+#         if serializer.is_valid():
+#             account = serializer.save()
+
+#             # Send OTP for account verification via email
+#             # if email:
+#             #     subject = 'Account Verification: Social Media'
+#             #     message = f'Your Account is created, please verify with this OTP {account.otp}. Otp will expire within 5 minutes'
+#             #     otp_sent = send_otp_email(account, subject, message)
+#             #     if not otp_sent:
+#             #         return Response({"error": "Failed to send OTP email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+#             # Process mobile verification if provided
+#             if mobile:
+#                 pass  # Implement mobile verification logic here
+
+#             response_data = {
+#                 'response': 'Account has been created',
+#                 'username': account.username,
+#                 'email': account.email,
+#                 'id': account.id,
+
+#             }
+#             return Response(response_data, status=status.HTTP_201_CREATED)
+#         else:
+#             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class UserLogin(APIView):
@@ -93,32 +118,18 @@ class UserLogin(APIView):
         email = request.data.get("email")
         password = request.data.get("password")
 
-        # Check if email and password are provided
         if not email or not password:
             return Response({"error": "Email and password are required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Authenticate the user
         user = authenticate(request, username=email, password=password)
 
-        # Check if the user is authenticated
         if user is None:
             return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Check if the user has two-factor authentication enabled
         if user.two_factor_auth:
-            generated_otp = generate_otp()
-            subject = 'Verify Identity'
-            message = f'Your two-factor authentication code is {generated_otp}. Opt will expire in 5 minutes.'
-            otp_sent = send_otp_email(user.email, subject, message)
+            # Code for two-factor authentication...
+            pass
 
-            if not otp_sent:
-                return Response({"error": "Failed to send OTP"}, status=status.HTTP_400_BAD_REQUEST)
-
-            user.otp = generated_otp
-            user.save()
-            return Response({"message": "Verify your identity! OTP sent to your email."}, status=status.HTTP_200_OK)
-
-        # Proceed with regular login process
         if not user.is_verified:
             return Response({"error": "Account not verified"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -128,17 +139,24 @@ class UserLogin(APIView):
         profile_url = settings.BACKEND + user.profile.url if user.profile else None
         token = get_tokens_for_user(user)
 
+        # Debugging: Print user's interests
+        interests = list(user.Interest.all().values_list('interests', flat=True))
+        print("User interests:", interests)
+
         user_data = {
             "user_id": user.id,
             "username": user.username,
             "profile": profile_url,
             "fullname": user.full_name,
             "info": user.profile_info if user.profile_info else None,
+            "interests": interests,  # Corrected the key name
             "token": token,
-            "two-factor-auth":user.two_factor_auth
+            "two-factor-auth": user.two_factor_auth
         }
 
         return Response({"message": "Logged in", "user": user_data}, status=status.HTTP_202_ACCEPTED)
+
+
 
 class GoogleAuthAPIView(APIView):
     """

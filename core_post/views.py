@@ -9,7 +9,7 @@ from rest_framework.decorators import action
 from core_post.models import UserPost
 from core_post.serializers import (ArchieveSerializer, SocialPostSerializer, CommentSerializer, RCommentSerializer, FavoriteSerializer,
                                    LikeSerializer, PostImageMediaSerializer, PostVideoMediaSerializer, SaveSerializer, UnsaveSerializer, UserPostSerializer, UserPostSerializer)
-
+from django.db.models import Count
 # Create your views here.
 
 
@@ -24,6 +24,8 @@ class SocialPOST(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        interests = user.Interest.all()
+        
         queryset = UserPost.objects.filter(
             is_published=True,  # Filter out unpublished posts
             is_archieved=False,  # Filter out archived posts
@@ -31,10 +33,21 @@ class SocialPOST(viewsets.ModelViewSet):
         )
 
         # Filter posts based on user interests if available
-        if user.Interest.exists():
-            queryset = queryset.filter(add_topics__in=user.Interest.all())
+        if interests.exists():
+            queryset = queryset.filter(add_topics__in=interests)
 
-        return queryset
+        # If no posts match the user's interests, show similar and trending posts
+        if not queryset.exists():
+            queryset = UserPost.objects.filter(
+                is_published=True,  # Filter out unpublished posts
+                is_archieved=False,  # Filter out archived posts
+                is_draft=False  # Filter out draft posts
+            ).annotate(
+                total_likes=Count('likes'),
+                total_comments=Count('comments')
+            ).order_by('-total_likes', '-total_comments')[:10]  # Show top 10 trending posts
+
+        return queryset 
 
 class UserPostCreateView(generics.CreateAPIView):
     """
@@ -93,7 +106,7 @@ class UserPostCreateView(generics.CreateAPIView):
             transaction.rollback()
 
             # Return error response
-            return Response({"error": "An error occurred while saving the post."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": f"An error occurred while saving the post. {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # If everything is successful, return the response
         headers = self.get_success_headers(serializer.data)
