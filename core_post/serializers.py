@@ -185,7 +185,7 @@ class SocialPostSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserPost
-        fields = ('images', 'videos', 'title', 'description', 'date', 'likes', 'comments')
+        fields = "__all__"
 
     def to_representation(self, instance):
         """
@@ -196,7 +196,7 @@ class SocialPostSerializer(serializers.ModelSerializer):
         # Check if the post should be shown only to close friends
         if instance.show_to_close_friends:
             if not request_user in instance.user.close_friends.all():
-                return {}
+                return {"Restricted":"User add privacy, You don't able to see post"}
 
         # Check if the post creator has muted the requesting user
         if request_user in instance.user.mute_peoples.all():

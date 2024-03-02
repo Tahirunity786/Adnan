@@ -21,33 +21,36 @@ class SocialPOST(viewsets.ModelViewSet):
     A ViewSet for handling CRUD operations related to comments on user posts.
     """
     serializer_class = SocialPostSerializer
-
+    permission_classes = [IsAuthenticated]
+    
     def get_queryset(self):
         user = self.request.user
         interests = user.Interest.all()
-        
         queryset = UserPost.objects.filter(
             is_published=True,  # Filter out unpublished posts
             is_archieved=False,  # Filter out archived posts
             is_draft=False  # Filter out draft posts
         )
-
+    
         # Filter posts based on user interests if available
         if interests.exists():
-            queryset = queryset.filter(add_topics__in=interests)
-
+            queryset = queryset.filter(add_topics__in=interests.values_list('interests', flat=True))
+    
         # If no posts match the user's interests, show similar and trending posts
         if not queryset.exists():
             queryset = UserPost.objects.filter(
                 is_published=True,  # Filter out unpublished posts
                 is_archieved=False,  # Filter out archived posts
                 is_draft=False  # Filter out draft posts
-            ).annotate(
-                total_likes=Count('likes'),
-                total_comments=Count('comments')
-            ).order_by('-total_likes', '-total_comments')[:10]  # Show top 10 trending posts
-
-        return queryset 
+            )
+    
+        # Annotate queryset with count of likes
+        queryset = queryset.annotate(total_likes=Count('like'))
+    
+        # Order queryset by total likes descending
+        queryset = queryset.order_by('-total_likes')
+    
+        return queryset
 
 class UserPostCreateView(generics.CreateAPIView):
     """

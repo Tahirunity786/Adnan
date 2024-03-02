@@ -53,7 +53,6 @@ class CreateUserView(APIView):
         if serializer.is_valid():
             validated_data = serializer.validated_data
             interests_data = validated_data.pop('Interest', [])
-            print(interests_data)
             account = serializer.save()
             interest_names = [interest_obj.interests for interest_obj in interests_data]
             account.Interest.add(*interests_data)
@@ -68,48 +67,6 @@ class CreateUserView(APIView):
             return Response(response_data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        
-# class CreateUserView(APIView):
-#     """
-#     Class-based view for creating a new user account.
-#     """
-#     permission_classes = [AllowAny]
-
-#     def post(self, request, *args, **kwargs):
-#         """
-#         Handles the HTTP POST request for creating a new user.
-#         """
-#         serializer = CreateUserSerializer(data=request.data)
-#         email = request.data.get("email", None)
-#         mobile = request.data.get('mobile', None)
-
-#         if serializer.is_valid():
-#             account = serializer.save()
-
-#             # Send OTP for account verification via email
-#             # if email:
-#             #     subject = 'Account Verification: Social Media'
-#             #     message = f'Your Account is created, please verify with this OTP {account.otp}. Otp will expire within 5 minutes'
-#             #     otp_sent = send_otp_email(account, subject, message)
-#             #     if not otp_sent:
-#             #         return Response({"error": "Failed to send OTP email"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-#             # Process mobile verification if provided
-#             if mobile:
-#                 pass  # Implement mobile verification logic here
-
-#             response_data = {
-#                 'response': 'Account has been created',
-#                 'username': account.username,
-#                 'email': account.email,
-#                 'id': account.id,
-
-#             }
-#             return Response(response_data, status=status.HTTP_201_CREATED)
-#         else:
-#             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 class UserLogin(APIView):
     permission_classes = [AllowAny]
@@ -141,7 +98,6 @@ class UserLogin(APIView):
 
         # Debugging: Print user's interests
         interests = list(user.Interest.all().values_list('interests', flat=True))
-        print("User interests:", interests)
 
         user_data = {
             "user_id": user.id,
